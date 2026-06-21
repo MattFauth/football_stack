@@ -1,0 +1,658 @@
+name: football-data-platform
+
+x-runtime-environment: &runtime-environment
+  APP_ENV: ${APP_ENV:-development}
+  TZ: ${TZ:-America/Araguaina}
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+  DATASET_HANDLE: ${DATASET_HANDLE:-davidcariboo/player-scores}
+  RAW_DATA_DIR: /app/data/raw
+  WAREHOUSE_DIR: /app/warehouse
+
+  # O dbt e a carga escrevem exclusivamente no build.
+  DUCKDB_PATH: /app/warehouse/football_build.duckdb
+  DUCKDB_BUILD_PATH: /app/warehouse/football_build.duckdb
+  DUCKDB_SERVING_PATH: /app/warehouse/football_serving.duckdb
+
+  DBT_PROJECT_DIR: /app/dbt
+  DBT_PROFILES_DIR: /app/dbt
+  DBT_TARGET: ${DBT_TARGET:-dev}
+
+  DUCKDB_THREADS: ${DUCKDB_THREADS:-4}
+  DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-6GB}
+
+  KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
+
+x-app-volumes: &app-volumes
+  - type: bind
+    source: ./data
+    target: /app/data
+  - type: bind
+    source: ./warehouse
+    target: /app/warehouse
+  - type: bind
+    source: ./dbt
+    target: /app/dbt
+  - type: bind
+    source: ./scripts
+    target: /app/scripts
+    read_only: true
+  - type: bind
+    source: ./tests
+    target: /app/tests
+    read_only: true
+  - type: bind
+    source: ./notebooks
+    target: /app/notebooks
+  - type: bind
+    source: ./logs
+    target: /app/logs
+
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      PYTHON_VERSION: ${PYTHON_VERSION:-3.12.13}
+      APP_UID: ${APP_UID:-10001}
+      APP_GID: ${APP_GID:-10001}
+  image: football-data-platform:${APP_VERSION:-dev}
+  working_dir: /app
+  init: true
+  environment:
+    <<: *runtime-environment
+  volumes: *app-volumes
+  networks:
+    - football-network
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=2g,mode=1777
+  shm_size: 1gb
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  stop_grace_period: 30s
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
+  restart: "no"
+
+x-superset-environment: &superset-environment
+  TZ: ${TZ:-America/Araguaina}
+  PYTHONUNBUFFERED: "1"
+  SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+  SUPERSET_HOME: /app/superset_home
+  SUPERSET_ENV: production
+  FLASK_ENV: production
+
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Defina SUPERSET_SECRET_KEY no arquivo .env}
+
+  SUPERSET_DB_HOST: superset-db
+  SUPERSET_DB_PORT: "5432"
+  SUPERSET_DB_NAME: ${SUPERSET_DB_NAME:-superset}
+  SUPERSET_DB_USER: ${SUPERSET_DB_USER:-superset}
+  SUPERSET_DB_PASSWORD: ${SUPERSET_DB_PASSWORD:?Defina SUPERSET_DB_PASSWORD no arquivo .env}
+
+  SUPERSET_REDIS_HOST: superset-redis
+  SUPERSET_REDIS_PORT: "6379"
+  SUPERSET_REDIS_PASSWORD: ${SUPERSET_REDIS_PASSWORD:?Defina SUPERSET_REDIS_PASSWORD no arquivo .env}
+
+  SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+  SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-Football}
+  SUPERSET_ADMIN_LASTNAME: ${SUPERSET_ADMIN_LASTNAME:-Admin}
+  SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@example.com}
+  SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?Defina SUPERSET_ADMIN_PASSWORD no arquivo .env}
+
+  SUPERSET_WEBSERVER_WORKERS: ${SUPERSET_WEBSERVER_WORKERS:-2}
+  SUPERSET_WEBSERVER_THREADS: ${SUPERSET_WEBSERVER_THREADS:-20}
+  SUPERSET_WEBSERVER_TIMEOUT: ${SUPERSET_WEBSERVER_TIMEOUT:-120}
+  SUPERSET_CELERY_WORKERS: ${SUPERSET_CELERY_WORKERS:-2}
+  SUPERSET_LOG_LEVEL: ${SUPERSET_LOG_LEVEL:-INFO}
+
+  # Caminho visto dentro de todos os containers Superset.
+  FOOTBALL_DUCKDB_PATH: /app/warehouse/football_serving.duckdb
+
+x-superset-volumes: &superset-volumes
+  - type: volume
+    source: superset-home
+    target: /app/superset_home
+  - type: bind
+    source: ./warehouse
+    target: /app/warehouse
+    read_only: true
+
+x-superset-base: &superset-base
+  build:
+    context: .
+    dockerfile: docker/superset/Dockerfile
+    args:
+      SUPERSET_VERSION: ${SUPERSET_VERSION:-6.0.0}
+  image: football-superset:${SUPERSET_VERSION:-6.0.0}
+  init: true
+  environment:
+    <<: *superset-environment
+  volumes: *superset-volumes
+  networks:
+    - football-network
+    - superset-backend
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=1g,mode=1777
+  shm_size: 1gb
+  stop_grace_period: 60s
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  # ============================================================
+  # Pipeline completo
+  # download -> raw -> dbt build/test -> snapshot de serving
+  # ============================================================
+  pipeline:
+    <<: *app-base
+    profiles: [jobs]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+
+        echo "==> Baixando dataset"
+        python scripts/download_data.py
+
+        echo "==> Obtendo lock exclusivo do DuckDB"
+        exec 9>/app/warehouse/.duckdb-writer.lock
+        flock -x 9
+
+        echo "==> Carregando schema raw no banco de build"
+        python scripts/load_raw.py
+
+        echo "==> Instalando dependências dbt"
+        dbt deps \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}"
+
+        echo "==> Executando modelos e testes dbt"
+        dbt build \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
+
+        echo "==> Publicando snapshot para consumo read-only"
+        python scripts/publish_warehouse.py
+
+        echo "==> Pipeline concluído"
+    cpus: ${PIPELINE_CPUS:-4.0}
+    mem_limit: ${PIPELINE_MEMORY:-8g}
+
+  # ============================================================
+  # Jobs individuais
+  # ============================================================
+  download:
+    <<: *app-base
+    profiles: [jobs]
+    command: [python, scripts/download_data.py]
+    cpus: ${DOWNLOAD_CPUS:-2.0}
+    mem_limit: ${DOWNLOAD_MEMORY:-4g}
+
+  download-force:
+    <<: *app-base
+    profiles: [jobs]
+    command: [python, scripts/download_data.py, --force]
+    cpus: ${DOWNLOAD_CPUS:-2.0}
+    mem_limit: ${DOWNLOAD_MEMORY:-4g}
+
+  load-raw:
+    <<: *app-base
+    profiles: [jobs]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+        exec 9>/app/warehouse/.duckdb-writer.lock
+        flock -x 9
+        python scripts/load_raw.py
+    cpus: ${PIPELINE_CPUS:-4.0}
+    mem_limit: ${PIPELINE_MEMORY:-8g}
+
+  dbt-build:
+    <<: *app-base
+    profiles: [jobs]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+        exec 9>/app/warehouse/.duckdb-writer.lock
+        flock -x 9
+        dbt deps \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}"
+        dbt build \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
+    cpus: ${PIPELINE_CPUS:-4.0}
+    mem_limit: ${PIPELINE_MEMORY:-8g}
+
+  dbt-test:
+    <<: *app-base
+    profiles: [jobs]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+        exec 9>/app/warehouse/.duckdb-writer.lock
+        flock -x 9
+        dbt test \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
+    cpus: ${TEST_CPUS:-2.0}
+    mem_limit: ${TEST_MEMORY:-4g}
+
+  publish:
+    <<: *app-base
+    profiles: [jobs]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+        exec 9>/app/warehouse/.duckdb-writer.lock
+        flock -x 9
+        python scripts/publish_warehouse.py
+    cpus: ${TEST_CPUS:-2.0}
+    mem_limit: ${TEST_MEMORY:-4g}
+
+  python-test:
+    <<: *app-base
+    profiles: [quality]
+    command: [pytest, -v, --tb=short, /app/tests]
+    cpus: ${TEST_CPUS:-2.0}
+    mem_limit: ${TEST_MEMORY:-4g}
+
+  lint:
+    <<: *app-base
+    profiles: [quality]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+        ruff check scripts tests
+        ruff format --check scripts tests
+        dbt parse \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
+    cpus: ${TEST_CPUS:-2.0}
+    mem_limit: ${TEST_MEMORY:-4g}
+
+  # ============================================================
+  # Ambiente interativo
+  # ============================================================
+  shell:
+    <<: *app-base
+    profiles: [tools]
+    command: [bash]
+    stdin_open: true
+    tty: true
+
+  jupyter:
+    <<: *app-base
+    profiles: [development]
+    command:
+      - bash
+      - -lc
+      - |
+        exec jupyter lab \
+          --ip=0.0.0.0 \
+          --port=8888 \
+          --no-browser \
+          --ServerApp.root_dir=/app \
+          --ServerApp.token="$${JUPYTER_TOKEN}" \
+          --ServerApp.allow_remote_access=true \
+          --ServerApp.disable_check_xsrf=false
+    environment:
+      <<: *runtime-environment
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-football-local}
+    ports:
+      - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8888/api/status', timeout=5)" || exit 1
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 30s
+    cpus: ${JUPYTER_CPUS:-4.0}
+    mem_limit: ${JUPYTER_MEMORY:-8g}
+    restart: unless-stopped
+
+  # ============================================================
+  # Documentação dbt
+  # ============================================================
+  dbt-docs:
+    <<: *app-base
+    profiles: [documentation]
+    command:
+      - bash
+      - -lc
+      - |
+        set -Eeuo pipefail
+        dbt docs generate \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
+        exec dbt docs serve \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}" \
+          --host 0.0.0.0 \
+          --port 8080 \
+          --no-browser
+    ports:
+      - "127.0.0.1:${DBT_DOCS_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080', timeout=5)" || exit 1
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 30s
+    cpus: ${DOCS_CPUS:-1.0}
+    mem_limit: ${DOCS_MEMORY:-2g}
+    restart: unless-stopped
+
+  # ============================================================
+  # DuckDB CLI oficial, sobre o snapshot de serving
+  # ============================================================
+  duckdb-cli:
+    image: duckdb/duckdb:1.5.4
+    profiles: [tools]
+    working_dir: /workspace
+    command:
+      - -readonly
+      - /workspace/warehouse/football_serving.duckdb
+    volumes:
+      - type: bind
+        source: ./data
+        target: /workspace/data
+        read_only: true
+      - type: bind
+        source: ./warehouse
+        target: /workspace/warehouse
+        read_only: true
+    stdin_open: true
+    tty: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - football-network
+    restart: "no"
+
+  # ============================================================
+  # DuckDB UI
+  # A UI grava seus próprios metadados em um volume separado e
+  # anexa o snapshot analítico como read-only.
+  # ============================================================
+  duckdb-ui:
+    image: duckdb/duckdb:1.5.4
+    profiles: [duckdb-ui]
+    network_mode: host
+    working_dir: /workspace
+    command:
+      - -init
+      - /workspace/config/ui_init.sql
+      - -ui
+      - /workspace/ui/duckdb_ui.duckdb
+    volumes:
+      - type: bind
+        source: ./warehouse
+        target: /workspace/warehouse
+        read_only: true
+      - type: bind
+        source: ./docker/duckdb/ui_init.sql
+        target: /workspace/config/ui_init.sql
+        read_only: true
+      - type: volume
+        source: duckdb-ui-data
+        target: /workspace/ui
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  # ============================================================
+  # Superset - metastore PostgreSQL
+  # Superset 6.0 documenta suporte oficial até PostgreSQL 16.
+  # ============================================================
+  superset-db:
+    image: postgres:16.14-alpine
+    environment:
+      POSTGRES_DB: ${SUPERSET_DB_NAME:-superset}
+      POSTGRES_USER: ${SUPERSET_DB_USER:-superset}
+      POSTGRES_PASSWORD: ${SUPERSET_DB_PASSWORD:?Defina SUPERSET_DB_PASSWORD no arquivo .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TZ:-America/Araguaina}
+    volumes:
+      - type: volume
+        source: superset-postgres-data
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -h 127.0.0.1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - superset-backend
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 256mb
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # ============================================================
+  # Superset - cache, broker Celery e resultados assíncronos
+  # ============================================================
+  superset-redis:
+    image: redis:8.8.0-alpine
+    environment:
+      SUPERSET_REDIS_PASSWORD: ${SUPERSET_REDIS_PASSWORD:?Defina SUPERSET_REDIS_PASSWORD no arquivo .env}
+      TZ: ${TZ:-America/Araguaina}
+    command:
+      - sh
+      - -c
+      - |
+        exec redis-server \
+          --appendonly yes \
+          --appendfsync everysec \
+          --save 60 1000 \
+          --requirepass "$${SUPERSET_REDIS_PASSWORD}"
+    volumes:
+      - type: volume
+        source: superset-redis-data
+        target: /data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli --no-auth-warning -a "$${SUPERSET_REDIS_PASSWORD}" ping | grep -q PONG
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - superset-backend
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # ============================================================
+  # Migrações, permissões e usuário administrador
+  # ============================================================
+  superset-init:
+    <<: *superset-base
+    command: [/app/docker/init.sh]
+    depends_on:
+      superset-db:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+    restart: "no"
+
+  # ============================================================
+  # Aplicação web Superset
+  # ============================================================
+  superset-web:
+    <<: *superset-base
+    command:
+      - bash
+      - -lc
+      - |
+        exec gunicorn \
+          --bind 0.0.0.0:8088 \
+          --access-logfile - \
+          --error-logfile - \
+          --workers "$${SUPERSET_WEBSERVER_WORKERS}" \
+          --worker-class gthread \
+          --threads "$${SUPERSET_WEBSERVER_THREADS}" \
+          --timeout "$${SUPERSET_WEBSERVER_TIMEOUT}" \
+          --keep-alive 5 \
+          --max-requests 1000 \
+          --max-requests-jitter 100 \
+          "superset.app:create_app()"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+      superset-db:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${SUPERSET_PORT:-8088}:8088"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8088/health', timeout=5)" || exit 1
+      interval: 15s
+      timeout: 6s
+      retries: 10
+      start_period: 45s
+    cpus: ${SUPERSET_WEB_CPUS:-2.0}
+    mem_limit: ${SUPERSET_WEB_MEMORY:-3g}
+    restart: unless-stopped
+
+  # ============================================================
+  # Worker para SQL Lab assíncrono e tarefas de background
+  # ============================================================
+  superset-worker:
+    <<: *superset-base
+    command:
+      - bash
+      - -lc
+      - |
+        exec celery \
+          --app=superset.tasks.celery_app:app \
+          worker \
+          --pool=prefork \
+          -O fair \
+          --concurrency="$${SUPERSET_CELERY_WORKERS}" \
+          --loglevel="$${SUPERSET_LOG_LEVEL}"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+      superset-db:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery --app=superset.tasks.celery_app:app inspect ping -d "celery@$${HOSTNAME}" --timeout=5 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    cpus: ${SUPERSET_WORKER_CPUS:-2.0}
+    mem_limit: ${SUPERSET_WORKER_MEMORY:-3g}
+    restart: unless-stopped
+
+  # ============================================================
+  # Scheduler Celery. Deve existir exatamente uma instância.
+  # É opcional até ativarmos alertas/relatórios agendados.
+  # ============================================================
+  superset-beat:
+    <<: *superset-base
+    profiles: [superset-scheduler]
+    command:
+      - bash
+      - -lc
+      - |
+        exec celery \
+          --app=superset.tasks.celery_app:app \
+          beat \
+          --loglevel="$${SUPERSET_LOG_LEVEL}" \
+          --pidfile=/app/superset_home/celerybeat.pid \
+          --schedule=/app/superset_home/celerybeat-schedule
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+      superset-db:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+    cpus: ${SUPERSET_BEAT_CPUS:-0.5}
+    mem_limit: ${SUPERSET_BEAT_MEMORY:-1g}
+    restart: unless-stopped
+
+networks:
+  football-network:
+    name: football-data-network
+    driver: bridge
+  superset-backend:
+    name: football-superset-backend
+    driver: bridge
+    internal: true
+
+volumes:
+  superset-postgres-data:
+    name: football-superset-postgres-data
+  superset-redis-data:
+    name: football-superset-redis-data
+  superset-home:
+    name: football-superset-home
+  duckdb-ui-data:
+    name: football-duckdb-ui-data
