@@ -1,0 +1,46 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Tabelas de landing carregadas diretamente dos arquivos CSV do dataset
+      davidcariboo/player-scores. Todas as colunas são preservadas como text;
+      tipagem e interpretação semântica pertencem ao staging.
+    schema: raw
+
+    tables:
+      - name: appearances
+        description: Participações efetivas de jogadores em partidas.
+
+      - name: club_games
+        description: Perspectiva de cada equipe em uma partida.
+
+      - name: clubs
+        description: Cadastro corrente de clubes disponibilizado pela fonte.
+
+      - name: competitions
+        description: Cadastro de competições.
+
+      - name: countries
+        description: Cadastro de países.
+
+      - name: game_events
+        description: Eventos pontuais registrados durante partidas.
+
+      - name: game_lineups
+        description: Jogadores relacionados como titulares ou reservas.
+
+      - name: games
+        description: Partidas e seus atributos gerais.
+
+      - name: national_teams
+        description: Cadastro corrente de seleções nacionais.
+
+      - name: player_valuations
+        description: Avaliações históricas de mercado dos jogadores.
+
+      - name: players
+        description: Cadastro corrente de jogadores.
+
+      - name: transfers
+        description: Histórico de transferências de jogadores.

@@ -8,29 +8,24 @@ x-runtime-environment: &runtime-environment
 
   DATASET_HANDLE: ${DATASET_HANDLE:-davidcariboo/player-scores}
   RAW_DATA_DIR: /app/data/raw
-  WAREHOUSE_DIR: /app/warehouse
-
-  # O dbt e a carga escrevem exclusivamente no build.
-  DUCKDB_PATH: /app/warehouse/football_build.duckdb
-  DUCKDB_BUILD_PATH: /app/warehouse/football_build.duckdb
-  DUCKDB_SERVING_PATH: /app/warehouse/football_serving.duckdb
+  KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
 
   DBT_PROJECT_DIR: /app/dbt
   DBT_PROFILES_DIR: /app/dbt
   DBT_TARGET: ${DBT_TARGET:-dev}
+  DBT_THREADS: ${DBT_THREADS:-4}
 
-  DUCKDB_THREADS: ${DUCKDB_THREADS:-4}
-  DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-6GB}
-
-  KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
+  FOOTBALL_DB_HOST: football-db
+  FOOTBALL_DB_PORT: "5432"
+  FOOTBALL_DB_NAME: ${FOOTBALL_DB_NAME:-football}
+  FOOTBALL_DB_USER: ${FOOTBALL_DB_USER:-football}
+  FOOTBALL_DB_PASSWORD: ${FOOTBALL_DB_PASSWORD:?Defina FOOTBALL_DB_PASSWORD no arquivo .env}
+  FOOTBALL_DB_SSLMODE: disable
 
 x-app-volumes: &app-volumes
   - type: bind
     source: ./data
     target: /app/data
-  - type: bind
-    source: ./warehouse
-    target: /app/warehouse
   - type: bind
     source: ./dbt
     target: /app/dbt
@@ -116,17 +111,17 @@ x-superset-environment: &superset-environment
   SUPERSET_CELERY_WORKERS: ${SUPERSET_CELERY_WORKERS:-2}
   SUPERSET_LOG_LEVEL: ${SUPERSET_LOG_LEVEL:-INFO}
 
-  # Caminho visto dentro de todos os containers Superset.
-  FOOTBALL_DUCKDB_PATH: /app/warehouse/football_serving.duckdb
+  # Disponibilizadas para automação futura do cadastro da conexão.
+  FOOTBALL_DB_HOST: football-db
+  FOOTBALL_DB_PORT: "5432"
+  FOOTBALL_DB_NAME: ${FOOTBALL_DB_NAME:-football}
+  FOOTBALL_DB_USER: ${FOOTBALL_DB_USER:-football}
+  FOOTBALL_DB_PASSWORD: ${FOOTBALL_DB_PASSWORD:?Defina FOOTBALL_DB_PASSWORD no arquivo .env}
 
 x-superset-volumes: &superset-volumes
   - type: volume
     source: superset-home
     target: /app/superset_home
-  - type: bind
-    source: ./warehouse
-    target: /app/warehouse
-    read_only: true
 
 x-superset-base: &superset-base
   build:
@@ -158,12 +153,80 @@ x-superset-base: &superset-base
 
 services:
   # ============================================================
+  # Warehouse PostgreSQL
+  #
+  # PostgreSQL 18+ usa /var/lib/postgresql como ponto de volume.
+  # O cluster fica no subdiretório versionado 18/docker.
+  # ============================================================
+  football-db:
+    image: postgres:${FOOTBALL_DB_VERSION:-18.4}-alpine
+    environment:
+      POSTGRES_DB: ${FOOTBALL_DB_NAME:-football}
+      POSTGRES_USER: ${FOOTBALL_DB_USER:-football}
+      POSTGRES_PASSWORD: ${FOOTBALL_DB_PASSWORD:?Defina FOOTBALL_DB_PASSWORD no arquivo .env}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+      TZ: ${TZ:-America/Araguaina}
+      PGTZ: ${TZ:-America/Araguaina}
+    command:
+      - postgres
+      - -c
+      - max_connections=${FOOTBALL_DB_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_buffers=${FOOTBALL_DB_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${FOOTBALL_DB_EFFECTIVE_CACHE_SIZE:-1GB}
+      - -c
+      - maintenance_work_mem=${FOOTBALL_DB_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - work_mem=${FOOTBALL_DB_WORK_MEM:-8MB}
+      - -c
+      - wal_compression=on
+      - -c
+      - max_wal_size=${FOOTBALL_DB_MAX_WAL_SIZE:-2GB}
+      - -c
+      - checkpoint_timeout=${FOOTBALL_DB_CHECKPOINT_TIMEOUT:-15min}
+    volumes:
+      - type: volume
+        source: football-postgres-data
+        target: /var/lib/postgresql
+      - type: bind
+        source: ./docker/postgres/init
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+    ports:
+      - "127.0.0.1:${FOOTBALL_DB_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -h 127.0.0.1
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks:
+      - football-network
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 1gb
+    cpus: ${FOOTBALL_DB_CPUS:-4.0}
+    mem_limit: ${FOOTBALL_DB_MEMORY:-4g}
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # ============================================================
   # Pipeline completo
-  # download -> raw -> dbt build/test -> snapshot de serving
+  # download -> carga raw -> dbt build/test
   # ============================================================
   pipeline:
     <<: *app-base
     profiles: [jobs]
+    depends_on:
+      football-db:
+        condition: service_healthy
     command:
       - bash
       - -lc
@@ -173,11 +236,7 @@ services:
         echo "==> Baixando dataset"
         python scripts/download_data.py
 
-        echo "==> Obtendo lock exclusivo do DuckDB"
-        exec 9>/app/warehouse/.duckdb-writer.lock
-        flock -x 9
-
-        echo "==> Carregando schema raw no banco de build"
+        echo "==> Carregando schema raw no PostgreSQL"
         python scripts/load_raw.py
 
         echo "==> Instalando dependências dbt"
@@ -185,14 +244,20 @@ services:
           --project-dir "$${DBT_PROJECT_DIR}" \
           --profiles-dir "$${DBT_PROFILES_DIR}"
 
-        echo "==> Executando modelos e testes dbt"
-        dbt build \
+        echo "==> Validando conexão dbt"
+        dbt debug \
           --project-dir "$${DBT_PROJECT_DIR}" \
           --profiles-dir "$${DBT_PROFILES_DIR}" \
           --target "$${DBT_TARGET}"
 
-        echo "==> Publicando snapshot para consumo read-only"
-        python scripts/publish_warehouse.py
+        echo "==> Executando modelos e testes dbt"
+        dbt build \
+          --full-refresh \
+          --fail-fast \
+          --threads "$${DBT_THREADS}" \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
 
         echo "==> Pipeline concluído"
     cpus: ${PIPELINE_CPUS:-4.0}
@@ -218,31 +283,31 @@ services:
   load-raw:
     <<: *app-base
     profiles: [jobs]
-    command:
-      - bash
-      - -lc
-      - |
-        set -Eeuo pipefail
-        exec 9>/app/warehouse/.duckdb-writer.lock
-        flock -x 9
-        python scripts/load_raw.py
+    depends_on:
+      football-db:
+        condition: service_healthy
+    command: [python, scripts/load_raw.py]
     cpus: ${PIPELINE_CPUS:-4.0}
     mem_limit: ${PIPELINE_MEMORY:-8g}
 
   dbt-build:
     <<: *app-base
     profiles: [jobs]
+    depends_on:
+      football-db:
+        condition: service_healthy
     command:
       - bash
       - -lc
       - |
         set -Eeuo pipefail
-        exec 9>/app/warehouse/.duckdb-writer.lock
-        flock -x 9
         dbt deps \
           --project-dir "$${DBT_PROJECT_DIR}" \
           --profiles-dir "$${DBT_PROFILES_DIR}"
         dbt build \
+          --full-refresh \
+          --fail-fast \
+          --threads "$${DBT_THREADS}" \
           --project-dir "$${DBT_PROJECT_DIR}" \
           --profiles-dir "$${DBT_PROFILES_DIR}" \
           --target "$${DBT_TARGET}"
@@ -252,31 +317,20 @@ services:
   dbt-test:
     <<: *app-base
     profiles: [jobs]
+    depends_on:
+      football-db:
+        condition: service_healthy
     command:
-      - bash
-      - -lc
-      - |
-        set -Eeuo pipefail
-        exec 9>/app/warehouse/.duckdb-writer.lock
-        flock -x 9
-        dbt test \
-          --project-dir "$${DBT_PROJECT_DIR}" \
-          --profiles-dir "$${DBT_PROFILES_DIR}" \
-          --target "$${DBT_TARGET}"
-    cpus: ${TEST_CPUS:-2.0}
-    mem_limit: ${TEST_MEMORY:-4g}
-
-  publish:
-    <<: *app-base
-    profiles: [jobs]
-    command:
-      - bash
-      - -lc
-      - |
-        set -Eeuo pipefail
-        exec 9>/app/warehouse/.duckdb-writer.lock
-        flock -x 9
-        python scripts/publish_warehouse.py
+      - dbt
+      - test
+      - --threads
+      - "$${DBT_THREADS}"
+      - --project-dir
+      - "$${DBT_PROJECT_DIR}"
+      - --profiles-dir
+      - "$${DBT_PROFILES_DIR}"
+      - --target
+      - "$${DBT_TARGET}"
     cpus: ${TEST_CPUS:-2.0}
     mem_limit: ${TEST_MEMORY:-4g}
 
@@ -290,6 +344,9 @@ services:
   lint:
     <<: *app-base
     profiles: [quality]
+    depends_on:
+      football-db:
+        condition: service_healthy
     command:
       - bash
       - -lc
@@ -305,7 +362,7 @@ services:
     mem_limit: ${TEST_MEMORY:-4g}
 
   # ============================================================
-  # Ambiente interativo
+  # Ferramentas interativas
   # ============================================================
   shell:
     <<: *app-base
@@ -314,9 +371,33 @@ services:
     stdin_open: true
     tty: true
 
+  football-psql:
+    image: postgres:${FOOTBALL_DB_VERSION:-18.4}-alpine
+    profiles: [tools]
+    depends_on:
+      football-db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${FOOTBALL_DB_PASSWORD:?Defina FOOTBALL_DB_PASSWORD no arquivo .env}
+      PGHOST: football-db
+      PGPORT: "5432"
+      PGDATABASE: ${FOOTBALL_DB_NAME:-football}
+      PGUSER: ${FOOTBALL_DB_USER:-football}
+    command: [psql]
+    stdin_open: true
+    tty: true
+    networks:
+      - football-network
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   jupyter:
     <<: *app-base
     profiles: [development]
+    depends_on:
+      football-db:
+        condition: service_healthy
     command:
       - bash
       - -lc
@@ -352,6 +433,9 @@ services:
   dbt-docs:
     <<: *app-base
     profiles: [documentation]
+    depends_on:
+      football-db:
+        condition: service_healthy
     command:
       - bash
       - -lc
@@ -383,79 +467,18 @@ services:
     restart: unless-stopped
 
   # ============================================================
-  # DuckDB CLI oficial, sobre o snapshot de serving
-  # ============================================================
-  duckdb-cli:
-    image: duckdb/duckdb:1.5.4
-    profiles: [tools]
-    working_dir: /workspace
-    command:
-      - -readonly
-      - /workspace/warehouse/football_serving.duckdb
-    volumes:
-      - type: bind
-        source: ./data
-        target: /workspace/data
-        read_only: true
-      - type: bind
-        source: ./warehouse
-        target: /workspace/warehouse
-        read_only: true
-    stdin_open: true
-    tty: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    networks:
-      - football-network
-    restart: "no"
-
-  # ============================================================
-  # DuckDB UI
-  # A UI grava seus próprios metadados em um volume separado e
-  # anexa o snapshot analítico como read-only.
-  # ============================================================
-  duckdb-ui:
-    image: duckdb/duckdb:1.5.4
-    profiles: [duckdb-ui]
-    network_mode: host
-    working_dir: /workspace
-    command:
-      - -init
-      - /workspace/config/ui_init.sql
-      - -ui
-      - /workspace/ui/duckdb_ui.duckdb
-    volumes:
-      - type: bind
-        source: ./warehouse
-        target: /workspace/warehouse
-        read_only: true
-      - type: bind
-        source: ./docker/duckdb/ui_init.sql
-        target: /workspace/config/ui_init.sql
-        read_only: true
-      - type: volume
-        source: duckdb-ui-data
-        target: /workspace/ui
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
-
-  # ============================================================
   # Superset - metastore PostgreSQL
   # Superset 6.0 documenta suporte oficial até PostgreSQL 16.
   # ============================================================
   superset-db:
-    image: postgres:16.14-alpine
+    image: postgres:${SUPERSET_POSTGRES_VERSION:-16.14}-alpine
     environment:
       POSTGRES_DB: ${SUPERSET_DB_NAME:-superset}
       POSTGRES_USER: ${SUPERSET_DB_USER:-superset}
       POSTGRES_PASSWORD: ${SUPERSET_DB_PASSWORD:?Defina SUPERSET_DB_PASSWORD no arquivo .env}
       PGDATA: /var/lib/postgresql/data/pgdata
       TZ: ${TZ:-America/Araguaina}
+      PGTZ: ${TZ:-America/Araguaina}
     volumes:
       - type: volume
         source: superset-postgres-data
@@ -484,7 +507,7 @@ services:
   # Superset - cache, broker Celery e resultados assíncronos
   # ============================================================
   superset-redis:
-    image: redis:8.8.0-alpine
+    image: redis:${SUPERSET_REDIS_VERSION:-8.8.0}-alpine
     environment:
       SUPERSET_REDIS_PASSWORD: ${SUPERSET_REDIS_PASSWORD:?Defina SUPERSET_REDIS_PASSWORD no arquivo .env}
       TZ: ${TZ:-America/Araguaina}
@@ -612,7 +635,6 @@ services:
 
   # ============================================================
   # Scheduler Celery. Deve existir exatamente uma instância.
-  # É opcional até ativarmos alertas/relatórios agendados.
   # ============================================================
   superset-beat:
     <<: *superset-base
@@ -648,11 +670,11 @@ networks:
     internal: true
 
 volumes:
+  football-postgres-data:
+    name: football-postgres-data
   superset-postgres-data:
     name: football-superset-postgres-data
   superset-redis-data:
     name: football-superset-redis-data
   superset-home:
     name: football-superset-home
-  duckdb-ui-data:
-    name: football-duckdb-ui-data

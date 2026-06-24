@@ -1,0 +1,16 @@
+dbt-core==1.11.11
+dbt-postgres==1.10.1
+psycopg[binary]==3.3.4
+
+kagglehub==1.0.2
+
+jupyterlab==4.6.0
+ipykernel>=6.29,<7
+
+pandas>=2.2,<4
+pyarrow>=18,<22
+
+pytest==9.1.1
+pytest-cov==7.1.0
+
+ruff==0.15.18

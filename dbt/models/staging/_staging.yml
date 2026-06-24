@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: stg_clubs
+    description: "Clubes com tipagem correta"
+    columns:
+      - name: club_id
+        description: "Primary key for clubs"
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_national_teams
+    description: "Seleções nacionais com tipagem correta"
+    columns:
+      - name: national_team_id
+        description: "Primary key for national teams"
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_players
+    description: "Jogadores com tipagem correta"
+    columns:
+      - name: player_id
+        description: "Primary key for players"
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_games
+    description: "Partidas com tipagem correta"
+    columns:
+      - name: game_id
+        description: "Primary key for games"
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_appearances
+    description: "Aparições de jogadores em partidas com tipagem correta"
+    columns:
+      - name: appearance_id
+        description: "Primary key for appearances"
+        tests:
+          - unique
+          - not_null
