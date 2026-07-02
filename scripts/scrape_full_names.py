@@ -1,7 +1,6 @@
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
-import psycopg2
 import csv
 import os
 

@@ -55,7 +55,7 @@ O resultado desse robô já está salvo nativamente no repositório em `dbt/seed
 No entanto, caso você atualize os dados base futuramente e precise buscar o nome de novos jogadores faltantes, basta rodar o extrator:
 ```bash
 # Roda o script e salva no arquivo CSV de Seed
-docker compose run --rm shell -c "python scripts/scrape_full_names.py"
+docker compose run --rm shell python scripts/scrape_full_names.py
 
 # Re-executa apenas a camada de dbt para recompilar a dimensão com os novos dados
 docker compose run --rm dbt-build
@@ -73,7 +73,9 @@ docker compose up -d superset-db superset-redis superset-web superset-worker
 - Entre com o login administrador configurado no seu `.env` (Padrão: `admin` / sua-senha)
 
 **Conectando o Data Warehouse:**
-Dentro do Superset, crie uma nova conexão de banco de dados PostgreSQL apontando para o seu host `football-db` com o banco `football` e a senha definida, e comece a construir seus dashboards em cima da *layer* `marts`!
+Dentro do Superset, crie uma nova conexão de banco de dados PostgreSQL apontando para o host de rede `football-db` com o banco `football` e a senha definida, e comece a construir seus dashboards em cima da *layer* `marts`.
+
+Se você quiser acessar o banco diretamente da sua máquina, use `docker compose exec football-db psql -U football -d football`.
 
 ---
 
