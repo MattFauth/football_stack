@@ -4,15 +4,6 @@ from bs4 import BeautifulSoup
 import csv
 import os
 
-# Database configuration
-DB_PARAMS = {
-    'dbname': 'football',
-    'user': 'football',
-    'password': 'football',
-    'host': 'localhost',
-    'port': '5432'
-}
-
 CSV_FILE = 'dbt/seeds/player_full_names.csv'
 
 async def fetch_name(session, player_id, url, semaphore):

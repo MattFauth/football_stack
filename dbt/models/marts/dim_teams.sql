@@ -7,6 +7,7 @@ select
     team_name,
     team_code,
     team_type,
+    is_inferred,
     total_market_value,
     squad_size,
     average_age,

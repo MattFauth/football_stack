@@ -30,19 +30,19 @@ models:
       - name: home_team_id
         description: "Foreign key for home team"
         tests:
+          - not_null
           - relationships:
-              to: ref('dim_teams')
-              field: team_id
-              config:
-                severity: warn
+              arguments:
+                to: ref('dim_teams')
+                field: team_id
       - name: away_team_id
         description: "Foreign key for away team"
         tests:
+          - not_null
           - relationships:
-              to: ref('dim_teams')
-              field: team_id
-              config:
-                severity: warn
+              arguments:
+                to: ref('dim_teams')
+                field: team_id
 
   - name: fct_appearances
     description: "Tabela fato de aparições detalhando a atuação de cada jogador na partida"
@@ -55,16 +55,16 @@ models:
       - name: player_id
         description: "Foreign key for player"
         tests:
+          - not_null
           - relationships:
-              to: ref('dim_players')
-              field: player_id
-              config:
-                severity: warn
+              arguments:
+                to: ref('dim_players')
+                field: player_id
       - name: game_id
         description: "Foreign key for game"
         tests:
+          - not_null
           - relationships:
-              to: ref('fct_games')
-              field: game_id
-              config:
-                severity: warn
+              arguments:
+                to: ref('fct_games')
+                field: game_id

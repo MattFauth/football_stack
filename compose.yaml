@@ -320,16 +320,14 @@ services:
       football-db:
         condition: service_healthy
     command:
-      - dbt
-      - test
-      - --threads
-      - "$${DBT_THREADS}"
-      - --project-dir
-      - "$${DBT_PROJECT_DIR}"
-      - --profiles-dir
-      - "$${DBT_PROFILES_DIR}"
-      - --target
-      - "$${DBT_TARGET}"
+      - bash
+      - -lc
+      - |
+        exec dbt test \
+          --threads "$${DBT_THREADS}" \
+          --project-dir "$${DBT_PROJECT_DIR}" \
+          --profiles-dir "$${DBT_PROFILES_DIR}" \
+          --target "$${DBT_TARGET}"
     cpus: ${TEST_CPUS:-2.0}
     mem_limit: ${TEST_MEMORY:-4g}
 

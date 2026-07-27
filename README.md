@@ -47,7 +47,7 @@ O que este container fará por debaixo dos panos?
 1. Executará `download_data.py` se comunicando com a API do Kaggle e baixando o dataset em CSVs para `data/raw`.
 2. Executará `load_raw.py` conectando-se ao PostgreSQL (`football-db`) e criando dinamicamente o Schema `raw` com as tabelas brutas.
 3. Instalará as dependências do `dbt`.
-4. Rodará o `dbt build`, compilando e materializando as camadas `staging`, `core` e `marts` no Banco de Dados, além de rodar mais de 40 testes de integridade.
+4. Rodará o `dbt build`, compilando e materializando as camadas `staging`, `core` e `marts` no Banco de Dados, além de executar 26 testes de integridade.
 
 ### 4. Bônus: Enriquecimento via Web Scraping
 Durante o desenvolvimento, notou-se que cerca de 3.095 jogadores possuíam apenas o apelido cadastrado, sem o nome real de batismo. Para sanar isso, construímos um robô extrator assíncrono.
@@ -89,4 +89,9 @@ importe o pacote para continuar o trabalho.
 
 Camada de negócios (`marts`) materializada no Postgres após a execução do `pipeline`:
 - **Dimensões**: `dim_players`, `dim_teams`, `dim_competitions`
-- **Fatos**: `fct_games`, `fct_appearances`, `fct_transfers`, `fct_player_valuations`, `fct_club_games`, `fct_game_events`, `fct_game_lineups`.
+- **Fatos**: `fct_games`, `fct_appearances`, `fct_transfers`, `fct_player_valuations`, `fct_club_games`.
+
+As tabelas de alto volume `fct_game_events` e `fct_game_lineups` ficam na
+camada `core`. Como o cadastro de clubes e jogadores representa o estado
+corrente da fonte, as dimensões incluem membros históricos inferidos a partir
+dos fatos. A coluna `is_inferred` permite identificá-los.
