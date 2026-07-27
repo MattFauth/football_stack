@@ -43,6 +43,33 @@ models:
               arguments:
                 to: ref('dim_teams')
                 field: team_id
+      - name: home_team_goals_excl_shootout
+        description: "Home-team goals excluding penalty-shootout conversions; null when event data is unavailable"
+      - name: away_team_goals_excl_shootout
+        description: "Away-team goals excluding penalty-shootout conversions; null when event data is unavailable"
+      - name: home_team_shootout_goals
+        description: "Successful home-team penalty-shootout conversions"
+      - name: away_team_shootout_goals
+        description: "Successful away-team penalty-shootout conversions"
+      - name: event_data_available
+        description: "Whether the source contains event data for the game"
+      - name: went_to_shootout
+        description: "Whether the event data identifies a penalty shootout"
+      - name: score_reconciled
+        description: "Whether event goals reconcile with the score after removing shootout conversions"
+      - name: score_format
+        description: "How the source score relates to shootout conversions: no_shootout, includes_shootout, excludes_shootout, unreconciled_shootout, or no_event_data"
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - no_shootout
+                  - includes_shootout
+                  - excludes_shootout
+                  - unreconciled_shootout
+                  - no_event_data
+      - name: game_result_excl_shootout
+        description: "Result after regular and extra time, excluding the penalty shootout"
 
   - name: fct_appearances
     description: "Tabela fato de aparições detalhando a atuação de cada jogador na partida"
