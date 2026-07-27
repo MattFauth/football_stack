@@ -77,6 +77,12 @@ Dentro do Superset, crie uma nova conexão de banco de dados PostgreSQL apontand
 
 Se você quiser acessar o banco diretamente da sua máquina, use `docker compose exec football-db psql -U football -d football`.
 
+**Continuando os dashboards em outra máquina:**
+Os dashboards ficam armazenados no metastore local do Superset e não são
+sincronizados pelo Git automaticamente. Exporte dashboards e dependências pela
+interface do Superset e salve os pacotes em `superset/assets/`. Na outra máquina,
+importe o pacote para continuar o trabalho.
+
 ---
 
 ## 🏗️ Estrutura Dimensional do DW
