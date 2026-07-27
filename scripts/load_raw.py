@@ -276,17 +276,58 @@ def load_table(
             row_count = int(cursor.fetchone()[0])
 
             cursor.execute(
-                sql.SQL("DROP TABLE IF EXISTS raw.{}").format(
-                    sql.Identifier(table_name)
-                )
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'raw'
+                  AND table_name = %s
+                ORDER BY ordinal_position
+                """,
+                (table_name,),
             )
+            existing_columns = [row[0] for row in cursor.fetchall()]
 
-            cursor.execute(
-                sql.SQL("ALTER TABLE raw.{} RENAME TO {}").format(
-                    sql.Identifier(staging_name),
-                    sql.Identifier(table_name),
+            if existing_columns:
+                if existing_columns != columns:
+                    raise RuntimeError(
+                        f"Schema de raw.{table_name} mudou. "
+                        f"Atual: {existing_columns}; novo: {columns}. "
+                        "Ajuste os modelos dependentes antes de recarregar."
+                    )
+
+                # Preserva o OID da tabela original para não invalidar as
+                # views do dbt que dependem diretamente da camada raw.
+                cursor.execute(
+                    sql.SQL("TRUNCATE TABLE raw.{}").format(
+                        sql.Identifier(table_name)
+                    )
                 )
-            )
+                cursor.execute(
+                    sql.SQL(
+                        "INSERT INTO raw.{} ({}) SELECT {} FROM raw.{}"
+                    ).format(
+                        sql.Identifier(table_name),
+                        sql.SQL(", ").join(
+                            sql.Identifier(column) for column in columns
+                        ),
+                        sql.SQL(", ").join(
+                            sql.Identifier(column) for column in columns
+                        ),
+                        sql.Identifier(staging_name),
+                    )
+                )
+                cursor.execute(
+                    sql.SQL("DROP TABLE raw.{}").format(
+                        sql.Identifier(staging_name)
+                    )
+                )
+            else:
+                cursor.execute(
+                    sql.SQL("ALTER TABLE raw.{} RENAME TO {}").format(
+                        sql.Identifier(staging_name),
+                        sql.Identifier(table_name),
+                    )
+                )
 
             cursor.execute(
                 sql.SQL(
