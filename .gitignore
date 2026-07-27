@@ -1,4 +1,29 @@
-data/raw/*
+# Credenciais e configuração local
 .env
+.env.*
+!.env.example
+
+# Dados baixados e bancos locais
+data/raw/
 *.duckdb
 *.lock
+
+# Artefatos gerados pelo dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
