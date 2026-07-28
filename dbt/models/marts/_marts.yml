@@ -95,3 +95,76 @@ models:
               arguments:
                 to: ref('fct_games')
                 field: game_id
+
+  - name: fct_team_games_enriched
+    description: "Uma linha por time e partida, com resultados e métricas pela perspectiva do time"
+    columns:
+      - name: game_id
+        description: "Partida representada pela perspectiva do time"
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_games')
+                field: game_id
+      - name: competition_id
+        description: "Competição da partida"
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_competitions')
+                field: competition_id
+      - name: team_id
+        description: "Time cuja perspectiva a linha representa"
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_teams')
+                field: team_id
+      - name: opponent_id
+        description: "Adversário do time na partida"
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_teams')
+                field: team_id
+      - name: venue
+        description: "Mando de campo pela perspectiva do time"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - home
+                  - away
+      - name: goals_for
+        description: "Gols do time, excluindo cobranças de disputa por pênaltis quando identificáveis"
+        tests:
+          - not_null
+      - name: goals_against
+        description: "Gols do adversário, excluindo cobranças de disputa por pênaltis quando identificáveis"
+        tests:
+          - not_null
+      - name: result
+        description: "Resultado pela perspectiva do time"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - win
+                  - draw
+                  - loss
+      - name: points
+        description: "Pontos conquistados pelo time na partida"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 0
+                  - 1
+                  - 3

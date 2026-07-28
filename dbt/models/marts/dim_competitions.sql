@@ -1,5 +1,5 @@
 with competitions as (
-    select * from {{ ref('stg_competitions') }}
+    select * from {{ ref('int_competitions') }}
 ),
 countries as (
     select * from {{ ref('stg_countries') }}
@@ -17,6 +17,7 @@ select
     c.confederation,
     co.total_clubs as country_total_clubs,
     co.total_players as country_total_players,
-    c.url
+    c.url,
+    c.is_inferred
 from competitions c
 left join countries co on c.country_id = co.country_id

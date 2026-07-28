@@ -1,0 +1,6 @@
+competition_id,competition_name,sub_type,competition_type,country_id,country_name,domestic_league_code,confederation
+POCP,taca-de-portugal,domestic_cup,domestic_cup,136,Portugal,PO1,europa
+CGB,efl-cup,domestic_cup,domestic_cup,189,England,GB1,europa
+COL1,liga-dimayor-finalizacion,first_tier,domestic_league,83,Colombia,COL1,amerika
+KLUB,fifa-club-world-cup,fifa_club_world_cup,international_cup,,,,fifa
+UKRS,ukrainian-super-cup,domestic_super_cup,other,177,Ukraine,UKR1,europa
