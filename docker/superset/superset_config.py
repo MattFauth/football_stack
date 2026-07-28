@@ -95,7 +95,44 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE = os.getenv("SUPERSET_COOKIE_SECURE", "false").lower() == "true"
 
+# O chart Handlebars compila os templates no navegador e, por isso, requer
+# 'unsafe-eval'. Mantemos as demais diretivas padrão do Superset explícitas.
+TALISMAN_CONFIG = {
+    "content_security_policy": {
+        "base-uri": ["'self'"],
+        "default-src": ["'self'"],
+        "img-src": [
+            "'self'",
+            "blob:",
+            "data:",
+            "https://apachesuperset.gateway.scarf.sh",
+            "https://static.scarf.sh/",
+            "ows.terrestris.de",
+            "https://cdn.document360.io",
+        ],
+        "worker-src": ["'self'", "blob:"],
+        "connect-src": [
+            "'self'",
+            "https://api.mapbox.com",
+            "https://events.mapbox.com",
+            "https://tile.openstreetmap.org",
+            "https://tile.osm.ch",
+        ],
+        "object-src": "'none'",
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "script-src": ["'self'", "'strict-dynamic'", "'unsafe-eval'"],
+    },
+    "content_security_policy_nonce_in": ["script-src"],
+    "force_https": False,
+    "session_cookie_secure": SESSION_COOKIE_SECURE,
+}
+
 # O SQL Lab pode usar o worker Celery quando a conexão for marcada como assíncrona.
+# Os charts Handlebars deste ambiente são mantidos por usuários confiáveis e
+# precisam renderizar HTML e CSS sem que o sanitizador desmonte o template.
+# Não reutilizar esta configuração em uma instância pública/multiusuário.
+HTML_SANITIZATION = False
+
 FEATURE_FLAGS = {
     "ENABLE_TEMPLATE_PROCESSING": True,
 }
