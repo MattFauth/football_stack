@@ -109,6 +109,7 @@ TALISMAN_CONFIG = {
             "https://static.scarf.sh/",
             "ows.terrestris.de",
             "https://cdn.document360.io",
+            "https://tmssl.akamaized.net",
         ],
         "worker-src": ["'self'", "blob:"],
         "connect-src": [
